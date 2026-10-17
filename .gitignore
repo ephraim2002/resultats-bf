@@ -1,33 +1,3 @@
-﻿# Secrets et variables locales
 .env
-.env.*
-!.env.exemple
-!.env.example
-*.pem
-*.key
-secrets/
-
-# Vagrant et VirtualBox
 .vagrant/
-*.box
-*.vdi
-*.vmdk
-*.vbox
-*.vbox-prev
-
-# Python
-__pycache__/
-*.py[cod]
-.venv/
-venv/
-.pytest_cache/
-
-# Journaux et fichiers temporaires
-*.log
-*.tmp
-.DS_Store
-Thumbs.db
-
-# Résultats de tests générés
-test-results/
-reports/generated/
+config/noeuds.yml
