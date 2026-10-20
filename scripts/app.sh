@@ -17,10 +17,9 @@ fi
 # 2. Adresse de la base lue dans la source unique de vérité (aucune IP en dur)
 DB_HOST=$(python3 - <<'PY'
 import yaml
-noeuds = yaml.safe_load(open("/vagrant/config/noeuds.yml"))["noeuds"]
+data = yaml.safe_load(open("/vagrant/config/noeuds.yml"))
+noeuds = data["noeuds"] if isinstance(data, dict) else data
 print(next(n["ip"] for n in noeuds if n["role"] == "bdd"))
-PY
-)
 
 # 3. Fichier d'environnement : réécrit en entier à chaque fois (jamais de >>)
 cat > /etc/resultats-bf.env <<EOF
