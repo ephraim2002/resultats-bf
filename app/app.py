@@ -1,89 +1,85 @@
-#!/usr/bin/env python3
-"""Service RÉSULTATS-BF : sans état, tout l'état vit dans la base.
-
-Points d'entrée : /resultat?matricule=..., /sante, /info
-Configuration par variables d'environnement (aucun secret dans le code).
-"""
-import json
 import os
 import socket
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
 
 import psycopg2
+from flask import Flask, jsonify, request
+from psycopg2.extras import RealDictCursor
 
-PORT = int(os.environ.get("APP_PORT", "3000"))
-HOTE = socket.gethostname()
-DB = dict(
-    host=os.environ["DB_HOST"],
-    port=int(os.environ.get("DB_PORT", "5432")),
-    dbname=os.environ.get("DB_NAME", "resultats"),
-    user=os.environ["DB_USER"],
-    password=os.environ["DB_PASSWORD"],
-    connect_timeout=2,                      # base absente : on échoue vite
-    options="-c statement_timeout=2000",
-)
-COLONNES = "matricule, nom, serie, moyenne, admis"
+app = Flask(__name__)
+
+DB_HOST = os.getenv("DB_HOST", "192.168.63.31")
+DB_NAME = os.getenv("DB_NAME", "resultats")
+DB_USER = os.getenv("DB_USER", "resultats_app")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "")
 
 
-def interroger(sql, params=()):
-    """Ouvre une connexion, exécute la requête, renvoie une ligne ou None."""
-    conn = psycopg2.connect(**DB)
+def get_connection():
+    return psycopg2.connect(
+        host=DB_HOST,
+        dbname=DB_NAME,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        connect_timeout=2,
+    )
+
+
+@app.get("/sante")
+def sante():
     try:
-        with conn.cursor() as cur:
-            cur.execute(sql, params)
-            return cur.fetchone()
-    finally:
-        conn.close()
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
+        return jsonify({"statut": "ok", "base": "accessible"}), 200
+    except Exception:
+        return jsonify({"statut": "indisponible", "base": "inaccessible"}), 503
 
 
-class Handler(BaseHTTPRequestHandler):
-    def repondre(self, code, corps):
-        data = json.dumps(corps, ensure_ascii=False).encode("utf-8")
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
+@app.get("/info")
+def info():
+    return jsonify({
+        "machine": socket.gethostname(),
+        "service": "resultats-bf-api"
+    }), 200
 
-    def sante(self):
-        try:
-            interroger("SELECT 1")
-        except psycopg2.Error:
-            return self.repondre(503, {"status": "base indisponible"})
-        self.repondre(200, {"status": "ok"})
 
-    def resultat(self, query):
-        matricule = (query.get("matricule") or [""])[0].strip()
-        if not matricule:
-            return self.repondre(400, {"erreur": "parametre matricule manquant"})
-        try:
-            ligne = interroger(
-                f"SELECT {COLONNES} FROM resultats WHERE matricule = %s", (matricule,))
-        except psycopg2.Error:
-            return self.repondre(503, {"erreur": "base indisponible"})
-        if ligne is None:
-            return self.repondre(404, {"erreur": "matricule inconnu"})
-        self.repondre(200, {
-            "matricule": ligne[0], "nom": ligne[1], "serie": ligne[2],
-            "moyenne": float(ligne[3]), "admis": ligne[4],
-        })
+@app.get("/resultat")
+def resultat():
+    matricule = request.args.get("matricule", "").strip()
 
-    def do_GET(self):
-        url = urlparse(self.path)
-        if url.path == "/info":
-            self.repondre(200, {"hote": HOTE})
-        elif url.path == "/sante":
-            self.sante()
-        elif url.path == "/resultat":
-            self.resultat(parse_qs(url.query))
-        else:
-            self.repondre(404, {"erreur": "introuvable"})
+    if not matricule:
+        return jsonify({"erreur": "Le parametre matricule est obligatoire"}), 400
 
-    def log_message(self, *args):           # silence : ne ralentit pas les tests de charge
-        pass
+    try:
+        with get_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT matricule, nom, serie, moyenne, admis
+                    FROM resultats
+                    WHERE matricule = %s
+                    """,
+                    (matricule,),
+                )
+                row = cur.fetchone()
+
+        if row is None:
+            return jsonify({"erreur": "Resultat introuvable"}), 404
+
+        return jsonify(dict(row)), 200
+
+    except Exception:
+        app.logger.exception("Erreur lors de la lecture des resultats")
+        return jsonify({"erreur": "Base de donnees indisponible"}), 503
+
+
+@app.get("/")
+def accueil():
+    return jsonify({
+        "projet": "RESULTATS-BF",
+        "endpoints": ["/sante", "/info", "/resultat?matricule=MAT000001"]
+    }), 200
 
 
 if __name__ == "__main__":
-    ThreadingHTTPServer.request_queue_size = 128   # supporte ab -c 50
-    ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+    app.run(host="0.0.0.0", port=5000)

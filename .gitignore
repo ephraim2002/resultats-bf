@@ -3,9 +3,27 @@
 .env.*
 !.env.exemple
 !.env.example
+!.env.*.example
 *.pem
 *.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+credentials.json
+service-account*.json
+*_service_account.json
 secrets/
+**/secrets/
+
+# Sauvegardes locales de bases de données
+*.dump
+*.backup
+*.sql.gz
 
 # Vagrant et VirtualBox
 .vagrant/
