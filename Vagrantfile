@@ -107,8 +107,8 @@ Vagrant.configure("2") do |config|
     end
 
     vm.vm.provision "shell",
-      path: "scripts/setup-lb.sh",
-      env: PROVISION_ENV
+    path: "scripts/setup-lb-ha.sh",
+    env: PROVISION_ENV.merge("LB_PRIORITY" => "110")
   end
 
   if ENABLE_HA
@@ -116,11 +116,22 @@ Vagrant.configure("2") do |config|
       vm.vm.hostname = "lb2"
       vm.vm.network "private_network", ip: "192.168.63.12"
 
+      # Port de secours pour accéder directement à lb2 depuis Windows.
+      vm.vm.network "forwarded_port",
+        guest: 80,
+        host: 8081,
+        host_ip: "127.0.0.1",
+        auto_correct: true
+
       vm.vm.provider "virtualbox" do |vb|
         vb.name = "resultats-bf-lb2"
         vb.memory = 512
         vb.cpus = 1
       end
+
+      vm.vm.provision "shell",
+        path: "scripts/setup-lb-ha.sh",
+        env: PROVISION_ENV.merge("LB_PRIORITY" => "100")
     end
   end
 
