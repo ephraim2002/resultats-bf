@@ -234,6 +234,16 @@ répéter les requêtes afin d'observer la répartition :
 }
 ```
 
+Pour verifier la replication
+vagrant ssh bdd1
+sudo -u postgres psql -d resultats
+
+INSERT INTO resultats (matricule, nom, serie, moyenne, admis)
+VALUES ('TESTREPLI001', 'Test Replication', 'H', 12.50, true)
+ON CONFLICT (matricule) DO NOTHING;
+
+SELECT * FROM resultats WHERE matricule = 'TESTREPLI001';
+
 Les fichiers [`tests/test-api.ps1`](./tests/test-api.ps1),
 [`tests/test-load.ps1`](./tests/test-load.ps1) et
 [`tests/test-failover.ps1`](./tests/test-failover.ps1) sont prévus pour les
