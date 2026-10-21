@@ -20,6 +20,8 @@ import yaml
 data = yaml.safe_load(open("/vagrant/config/noeuds.yml"))
 noeuds = data["noeuds"] if isinstance(data, dict) else data
 print(next(n["ip"] for n in noeuds if n["role"] == "bdd"))
+PY
+)
 
 # 3. Fichier d'environnement : réécrit en entier à chaque fois (jamais de >>)
 cat > /etc/resultats-bf.env <<EOF
