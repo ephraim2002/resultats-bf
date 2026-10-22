@@ -135,16 +135,33 @@ Vagrant.configure("2") do |config|
     end
   end
 
-  if ENABLE_OBS
+    if ENABLE_OBS
     config.vm.define "obs" do |vm|
       vm.vm.hostname = "obs"
       vm.vm.network "private_network", ip: "192.168.63.41"
 
+      vm.vm.network "forwarded_port",
+        guest: 3000,
+        host: 3000,
+        host_ip: "127.0.0.1",
+        auto_correct: true
+
+      vm.vm.network "forwarded_port",
+        guest: 9090,
+        host: 9090,
+        host_ip: "127.0.0.1",
+        auto_correct: true
+
       vm.vm.provider "virtualbox" do |vb|
         vb.name = "resultats-bf-obs"
-        vb.memory = 768
+        vb.memory = 1024
         vb.cpus = 1
       end
-    end
+
+      vm.vm.provision "shell",
+        path: "scripts/setup-observability.sh"
+      end
   end
+  config.vm.provision "shell",
+    path: "scripts/setup-node-exporter.sh"
 end

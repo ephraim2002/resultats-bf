@@ -46,8 +46,9 @@ elle ne bascule pas automatiquement les applications.
   disponible dans le `PATH`.
 - Une connexion Internet lors du premier démarrage, pour télécharger la box
   Ubuntu et installer les paquets des VM.
-- Environ 3 Go de mémoire vive disponibles pour les VM par défaut, en plus des
-  ressources nécessaires à Windows. Prévoir davantage pour l'hôte.
+- Environ 4,5 Go de mémoire vive pour les VM avec quatre applications et deux
+  répartiteurs ; prévoir environ 1 Go de plus si `ENABLE_OBS=true`, sans
+  compter les ressources nécessaires à Windows.
 
 Vérifier les installations :
 
@@ -81,12 +82,12 @@ Les paramètres utiles du modèle sont :
 | `REPL_USER` | `repli_user` | Compte PostgreSQL de réplication |
 | `REPL_PASSWORD` | à définir | Mot de passe du compte de réplication |
 | `ENABLE_HA` | `true` dans le modèle | Ajoute et provisionne le répartiteur `lb2` |
-| `ENABLE_OBS` | `false` | Ajoute la VM `obs` |
+| `ENABLE_OBS` | `false` | Ajoute et provisionne Prometheus et Grafana sur `obs` |
 
 `NB_APP` doit rester compris entre 2 et 4. Pour activer la haute disponibilité
-des répartiteurs, conserver `ENABLE_HA=true` dans `.env`. `ENABLE_OBS=true`
-ajoute la VM `obs`, mais son provisionnement Prometheus n'est pas encore
-implémenté.
+des répartiteurs, conserver `ENABLE_HA=true` dans `.env`. Pour activer
+l'observabilité, définir `ENABLE_OBS=true` dans `.env`. Cette option ajoute la
+VM `obs`, qui héberge Prometheus et Grafana.
 
 ## Valider et démarrer l'infrastructure
 
@@ -107,11 +108,18 @@ vagrant up lb1 lb2
 ```
 
 Ces commandes correspondent à la configuration du modèle (`NB_APP=4` et
-`ENABLE_HA=true`). `vagrant up` démarre chaque VM demandée et exécute son
-provisionneur. Si tu as choisi moins de quatre applications ou désactivé la
-haute disponibilité, retire les noms de VM correspondants des commandes. Par
-exemple, avec `NB_APP=2` et `ENABLE_HA=false`, utilise `vagrant up app1 app2`
-et `vagrant up lb1`.
+`ENABLE_HA=true`). Si `ENABLE_OBS=true` est aussi défini, démarrer et
+provisionner la VM d'observabilité :
+
+```powershell
+vagrant up obs
+```
+
+`vagrant up` démarre chaque VM demandée et exécute son provisionneur. Si tu as
+choisi moins de quatre applications ou désactivé la haute disponibilité,
+retire les noms de VM correspondants des commandes. Par exemple, avec
+`NB_APP=2` et `ENABLE_HA=false`, utilise `vagrant up app1 app2` et
+`vagrant up lb1`.
 
 Pour créer toutes les VM sans lancer les provisionneurs, puis les provisionner
 explicitement :
@@ -126,11 +134,78 @@ vagrant provision app3
 vagrant provision app4
 vagrant provision lb1
 vagrant provision lb2
+vagrant provision obs
 ```
 
 La deuxième méthode doit également respecter l'ordre `bdd1`, `bdd2`, les
-applications, puis les répartiteurs. Ne provisionner `app3`, `app4` et `lb2`
-que si ces VM sont configurées dans `.env`.
+applications, puis les répartiteurs et enfin `obs`. Ne provisionner `app3`,
+`app4`, `lb2` et `obs` que si ces VM sont activées dans `.env`.
+
+## Observabilité
+
+Avec `ENABLE_OBS=true`, la VM `obs` (`192.168.63.41`) installe et démarre
+Prometheus et Grafana. Le script `setup-observability.sh` configure Prometheus
+pour collecter les métriques toutes les 15 secondes et ajoute automatiquement
+Prometheus comme source de données par défaut dans Grafana. Le script
+`setup-node-exporter.sh` installe Node Exporter sur chaque VM ; il expose les
+métriques système sur le port `9100` du réseau privé. Si les autres VM étaient
+déjà créées avant l'ajout du provisionneur Node Exporter, les reprovisionner
+avec `vagrant provision` pour installer l'exporter sur celles-ci.
+
+| Outil | Accès depuis Windows | Fonction |
+| --- | --- | --- |
+| Grafana | [http://localhost:3000](http://localhost:3000) | Tableaux de bord et visualisation des métriques |
+| Prometheus | [http://localhost:9090](http://localhost:9090) | Collecte, exploration et requêtes PromQL |
+| Node Exporter | `http://<IP-de-la-VM>:9100/metrics` sur le réseau privé | Exposition des métriques système d'une VM |
+
+Les ports Grafana `3000` et Prometheus `9090` sont redirigés vers l'hôte sur
+`127.0.0.1`. Lors de la première connexion à Grafana, les identifiants
+initiaux du paquet sont `admin` / `admin` ; Grafana demande de définir un
+nouveau mot de passe. Ne conserve pas le mot de passe initial.
+
+Pour démarrer l'observabilité après avoir activé `ENABLE_OBS=true` dans `.env` :
+
+```powershell
+vagrant up obs
+```
+
+Pour vérifier l'état des services et la configuration Prometheus :
+
+```powershell
+vagrant ssh obs -c "sudo systemctl is-active prometheus"
+vagrant ssh obs -c "sudo systemctl is-active grafana-server"
+vagrant ssh obs -c "sudo promtool check config /etc/prometheus/prometheus.yml"
+Invoke-RestMethod http://localhost:9090/-/ready
+Invoke-RestMethod http://localhost:3000/api/health
+```
+
+Dans l'interface Prometheus, ouvre `Status` puis `Targets` pour vérifier les
+cibles de collecte. Les cibles Node Exporter sont déclarées dans
+`/etc/prometheus/prometheus.yml` : `bdd1`, `bdd2`, `app1` à `app4`, `lb1`,
+`lb2` et `obs`. Les machines optionnelles qui ne sont pas démarrées ou activées
+apparaîtront comme indisponibles (`DOWN`) ; cela ne signifie pas nécessairement
+que Prometheus est en panne. Les cibles activées doivent passer à `UP` après
+leur provisionnement.
+
+Exemples de requêtes PromQL à essayer dans Prometheus ou dans l'explorateur de
+Grafana :
+
+```promql
+# Nombre de cibles de collecte actives
+up
+
+# Pourcentage d'utilisation CPU par machine
+100 * (1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])))
+
+# Utilisation de la mémoire en octets par machine
+node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes
+```
+
+La source de données Prometheus est provisionnée automatiquement, mais aucun
+tableau de bord Grafana n'est installé par le script à ce stade. Tu peux créer
+un tableau de bord dans Grafana et y ajouter les requêtes PromQL ci-dessus.
+Node Exporter fournit des métriques système ; cette configuration ne collecte
+pas les métriques propres à PostgreSQL, HAProxy ou à l'API.
 
 ## Provisionnement et administration
 
@@ -328,6 +403,10 @@ vagrant destroy
 - [`scripts/setup-lb.sh`](./scripts/setup-lb.sh) : configuration de HAProxy.
 - [`scripts/setup-lb-ha.sh`](./scripts/setup-lb-ha.sh) : configuration de
   HAProxy et Keepalived sur les deux répartiteurs.
+- [`scripts/setup-observability.sh`](./scripts/setup-observability.sh) :
+  installation et configuration de Prometheus et Grafana sur `obs`.
+- [`scripts/setup-node-exporter.sh`](./scripts/setup-node-exporter.sh) :
+  installation de Node Exporter sur les machines provisionnées.
 - [`scripts/failover-db.sh`](./scripts/failover-db.sh) : promotion manuelle de
   la réplique PostgreSQL après confirmation.
 - [`tests/test-api.ps1`](./tests/test-api.ps1),
