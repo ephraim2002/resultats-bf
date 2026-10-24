@@ -31,6 +31,7 @@ DB_NAME=${DB_NAME:-resultats}
 DB_USER=${DB_USER}
 DB_PASSWORD=${DB_PASSWORD}
 APP_PORT=3000
+DRAIN_SECONDS=${DRAIN_SECONDS:-5}
 EOF
 chmod 600 /etc/resultats-bf.env
 
@@ -50,6 +51,7 @@ EnvironmentFile=/etc/resultats-bf.env
 ExecStart=/usr/bin/python3 /opt/resultats-bf/app.py
 Restart=always
 RestartSec=1
+TimeoutStopSec=20
 DynamicUser=yes
 
 [Install]

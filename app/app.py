@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
-"""Service RÉSULTATS-BF : sans état, tout l'état vit dans la base.
-
-Points d'entrée : /resultat?matricule=..., /sante, /info
-Configuration par variables d'environnement (aucun secret dans le code).
-"""
+"""Service RÉSULTATS-BF : sans état, tout l'état vit dans la base (/resultat, /sante, /info).
+Arrêt en douceur (E4) : sur SIGTERM, /sante renvoie 503 pendant DRAIN_SECONDS (le répartiteur
+écarte ce serveur), puis le service s'arrête : une mise à jour ne perd aucune requête."""
 import json
 import os
+import signal
 import socket
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 import psycopg2
 
+VERSION = "1.0"
 PORT = int(os.environ.get("APP_PORT", "3000"))
 HOTE = socket.gethostname()
+DRAIN = int(os.environ.get("DRAIN_SECONDS", "5"))
+ARRET = threading.Event()                   # levé à l'arrêt : cycle de vie, pas un état métier
 DB = dict(
     host=os.environ["DB_HOST"],
     port=int(os.environ.get("DB_PORT", "5432")),
@@ -27,7 +30,6 @@ COLONNES = "matricule, nom, serie, moyenne, admis"
 
 
 def interroger(sql, params=()):
-    """Ouvre une connexion, exécute la requête, renvoie une ligne ou None."""
     conn = psycopg2.connect(**DB)
     try:
         with conn.cursor() as cur:
@@ -47,6 +49,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def sante(self):
+        if ARRET.is_set():
+            return self.repondre(503, {"status": "arret en cours"})
         try:
             interroger("SELECT 1")
         except psycopg2.Error:
@@ -72,7 +76,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         url = urlparse(self.path)
         if url.path == "/info":
-            self.repondre(200, {"hote": HOTE})
+            self.repondre(200, {"hote": HOTE, "version": VERSION})
         elif url.path == "/sante":
             self.sante()
         elif url.path == "/resultat":
@@ -86,4 +90,10 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     ThreadingHTTPServer.request_queue_size = 128   # supporte ab -c 50
-    ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+    serveur = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+
+    def arreter(*_):
+        ARRET.set()
+        threading.Timer(DRAIN, serveur.shutdown).start()
+    signal.signal(signal.SIGTERM, arreter)
+    serveur.serve_forever()
