@@ -1,338 +1,171 @@
-# RÉSULTATS-BF
+# RÉSULTATS-BF - groupe 2
 
-Projet de travaux pratiques de virtualisation et cloud : déploiement d'une
-infrastructure résiliente et extensible pour consulter des résultats scolaires.
-Vagrant orchestre les machines virtuelles, PostgreSQL stocke et réplique les
-résultats, les serveurs applicatifs exposent une API Flask et HAProxy répartit
-les requêtes HTTP.
+Plateforme de consultation de résultats d'examens, résiliente et extensible, entièrement
+décrite en code avec Vagrant et VirtualBox (projet de groupe M1, module DevOps et
+infrastructures reproductibles). Un candidat consulte son résultat à partir de son
+matricule ; la panne d'une machine ne doit pas interrompre le service, et absorber plus de
+trafic se fait en ajoutant des serveurs applicatifs.
 
 ## Architecture
 
-Avec les valeurs de [`.env.exemple`](./.env.exemple) (`NB_APP=4` et
-`ENABLE_HA=true`), l'infrastructure comprend huit machines :
+Réseau privé du groupe 2 : `192.168.57.0/24`. Schéma : `docs/architecture.svg`.
 
-| Machine | Adresse privée | Rôle |
-| --- | --- | --- |
-| `lb1` | `192.168.63.11` | HAProxy/Keepalived, priorité VRRP 110 |
-| `lb2` | `192.168.63.12` | HAProxy/Keepalived, priorité VRRP 100 (si `ENABLE_HA=true`) |
-| `app1` | `192.168.63.21` | Serveur applicatif |
-| `app2` | `192.168.63.22` | Serveur applicatif |
-| `app3` | `192.168.63.23` | Serveur applicatif, si `NB_APP` vaut au moins 3 |
-| `app4` | `192.168.63.24` | Serveur applicatif, si `NB_APP=4` |
-| `bdd1` | `192.168.63.31` | Base PostgreSQL primaire |
-| `bdd2` | `192.168.63.32` | Réplique PostgreSQL en lecture seule |
+| Machine | Rôle | Adresse | RAM |
+|---|---|---|---|
+| (VIP) | IP virtuelle partagée par lb1 et lb2 (VRRP) | 192.168.57.5 | - |
+| lb1 | HAProxy + keepalived, actif | 192.168.57.11 | 512 Mo |
+| lb2 | HAProxy + keepalived, passif (extension E1) | 192.168.57.12 | 512 Mo |
+| app1 ... appN | API Flask + gunicorn, sans état (`NB_APP`, de 2 à 9) | 192.168.57.21 ... .2N | 512 Mo |
+| bdd1 | PostgreSQL primaire | 192.168.57.31 | 768 Mo |
+| bdd2 | PostgreSQL réplique en flux + Redis (extension E3) | 192.168.57.32 | 768 Mo |
 
-Keepalived fait basculer l'adresse IP virtuelle `192.168.63.10` entre les
-répartiteurs. HAProxy distribue les requêtes à tour de rôle (round-robin) et
-retire du pool les applications dont la route `/sante` ne répond plus HTTP 200.
-Le port `8080` de l'hôte est redirigé vers `lb1` ; `8081` permet d'accéder
-directement à `lb2`. Pour tester la VIP et le basculement, utiliser
-`http://192.168.63.10`.
+HAProxy répartit les requêtes en round-robin et n'envoie du trafic qu'aux serveurs dont
+`GET /sante` renvoie 200. Sa configuration est engendrée à partir de `config/noeuds.yml`,
+lui-même écrit par le `Vagrantfile` : aucune adresse de serveur n'est écrite en dur.
+Seul `lb1` expose un port vers l'hôte (8080).
 
-Les adresses, ressources mémoire et provisionneurs sont configurés dans le
-[`Vagrantfile`](./Vagrantfile). Le réseau privé utilisé est `192.168.63.0/24`.
-La base `resultats` est créée à partir de
-[`database/schema.sql`](./database/schema.sql) et alimentée par
-[`database/seed.sql`](./database/seed.sql) (50 000 résultats).
-La réplication PostgreSQL est configurée de `bdd1` vers `bdd2`. La promotion
-de la réplique en cas de panne de la base primaire est une opération manuelle ;
-elle ne bascule pas automatiquement les applications.
+L'API expose trois points d'entrée :
+
+| Requête | Réponse |
+|---|---|
+| `GET /resultat?matricule=BF000042` | Résultat du candidat en JSON (404 si inconnu, 503 si la base est indisponible) |
+| `GET /sante` | 200 si la base répond, 503 sinon (sonde de HAProxy) |
+| `GET /info` | Nom d'hôte du serveur qui a répondu |
 
 ## Prérequis
 
-- Windows avec PowerShell.
-- [VirtualBox](https://www.virtualbox.org/) installé et fonctionnel.
-- [Vagrant](https://developer.hashicorp.com/vagrant/install) installé et
-  disponible dans le `PATH`.
-- Une connexion Internet lors du premier démarrage, pour télécharger la box
-  Ubuntu et installer les paquets des VM.
-- Environ 3 Go de mémoire vive disponibles pour les VM par défaut, en plus des
-  ressources nécessaires à Windows. Prévoir davantage pour l'hôte.
-
-Vérifier les installations :
+- Windows avec PowerShell, ou Linux/macOS.
+- VirtualBox 6.1.28 ou plus récent, Vagrant, Git.
+- Connexion Internet au premier démarrage (boîte Ubuntu et paquets).
+- Environ 4 Go de RAM libre pour les VM avec les valeurs par défaut (2 serveurs applicatifs,
+  deux répartiteurs) ; environ 3 Go avec `LB2=0`.
 
 ```powershell
+git --version
 vagrant --version
 VBoxManage --version
 ```
 
-## Préparer la configuration
-
-Depuis le dossier du projet, copier le modèle d'environnement puis modifier les
-secrets :
+## Démarrage rapide
 
 ```powershell
-Copy-Item .env.exemple .env
-notepad .env
+git clone <url-du-depot> resultats-bf
+cd resultats-bf
+Copy-Item .env.exemple .env      # puis remplacer les mots de passe dans .env
+vagrant up                       # un seul up : tout est provisionné dans l'ordre
 ```
 
-Remplacer au minimum les valeurs d'exemple de `DB_PASSWORD` et
-`REPL_PASSWORD` par des mots de passe robustes et différents. Le fichier `.env`
-est ignoré par Git : ne pas le versionner ni partager son contenu.
-
-Les paramètres utiles du modèle sont :
-
-| Variable | Valeur par défaut | Description |
-| --- | --- | --- |
-| `NB_APP` | `4` dans le modèle | Nombre de VM applicatives, de 2 à 4 |
-| `DB_NAME` | `resultats` | Nom de la base de données |
-| `DB_USER` | `resultats_app` | Compte PostgreSQL de l'application |
-| `DB_PASSWORD` | à définir | Mot de passe du compte applicatif |
-| `REPL_USER` | `repli_user` | Compte PostgreSQL de réplication |
-| `REPL_PASSWORD` | à définir | Mot de passe du compte de réplication |
-| `ENABLE_HA` | `true` dans le modèle | Ajoute et provisionne le répartiteur `lb2` |
-| `ENABLE_OBS` | `false` | Ajoute la VM `obs` |
-
-`NB_APP` doit rester compris entre 2 et 4. Pour activer la haute disponibilité
-des répartiteurs, conserver `ENABLE_HA=true` dans `.env`. `ENABLE_OBS=true`
-ajoute la VM `obs`, mais son provisionnement Prometheus n'est pas encore
-implémenté.
-
-## Valider et démarrer l'infrastructure
-
-Valider la syntaxe et la configuration avant de lancer les VM :
+Vérifier le résultat :
 
 ```powershell
-vagrant validate
+curl.exe http://192.168.57.5/info
+curl.exe "http://192.168.57.5/resultat?matricule=BF000042"
+curl.exe http://localhost:8080/sante
 ```
 
-Pour provisionner dans l'ordre (la réplique dépend de la base primaire), lancer
-les commandes suivantes depuis le dossier du projet :
+Le fichier `.env` n'est jamais versionné. Le modèle `.env.exemple` contient les noms des
+variables : `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `REPL_USER`, `REPL_PASSWORD`,
+`REDIS_PASSWORD`. N'utiliser ni espaces, ni guillemets, ni `#` dans les valeurs.
+
+## Paramètres
+
+| Variable | Défaut | Effet |
+|---|---|---|
+| `NB_APP` | 2 | Nombre de serveurs applicatifs (2 à 9) |
+| `LB2` | actif | `LB2=0` supprime lb2 et keepalived (économie de RAM) |
+| `GROUPE` | 2 | Numéro de groupe, donc plage `192.168.(55+G).0/24` |
+
+Sous PowerShell, une variable se définit pour la session :
 
 ```powershell
-vagrant up bdd1
-vagrant up bdd2
-vagrant up app1 app2 app3 app4
-vagrant up lb1 lb2
+$env:NB_APP = 4
+vagrant up                         # crée app3 et app4
+vagrant provision lb1 lb2          # HAProxy prend en compte les nouveaux serveurs
+Remove-Item Env:NB_APP             # revient à la valeur par défaut
 ```
 
-Ces commandes correspondent à la configuration du modèle (`NB_APP=4` et
-`ENABLE_HA=true`). `vagrant up` démarre chaque VM demandée et exécute son
-provisionneur. Si tu as choisi moins de quatre applications ou désactivé la
-haute disponibilité, retire les noms de VM correspondants des commandes. Par
-exemple, avec `NB_APP=2` et `ENABLE_HA=false`, utilise `vagrant up app1 app2`
-et `vagrant up lb1`.
+`NB_APP` doit être défini à chaque commande `vagrant` qui régénère `config/noeuds.yml` ;
+sinon la configuration revient à 2 serveurs.
 
-Pour créer toutes les VM sans lancer les provisionneurs, puis les provisionner
-explicitement :
-
-```powershell
-vagrant up --no-provision
-vagrant provision bdd1
-vagrant provision bdd2
-vagrant provision app1
-vagrant provision app2
-vagrant provision app3
-vagrant provision app4
-vagrant provision lb1
-vagrant provision lb2
-```
-
-La deuxième méthode doit également respecter l'ordre `bdd1`, `bdd2`, les
-applications, puis les répartiteurs. Ne provisionner `app3`, `app4` et `lb2`
-que si ces VM sont configurées dans `.env`.
-
-## Provisionnement et administration
-
-Afficher l'état des machines :
+## Exploitation
 
 ```powershell
 vagrant status
+vagrant provision            # rejouable : ne modifie rien si rien n'a changé (R2)
+vagrant halt                 # arrête les VM
+vagrant destroy -f ; vagrant up    # reconstruction complète (R1)
 ```
 
-Relancer le provisionnement de toute l'infrastructure ou d'une machine précise
-après une modification :
+Statistiques HAProxy (réseau privé) : `vagrant ssh lb1 -c "curl -s 192.168.57.11:8404"`.
+
+### Bascule de la base (R6)
+
+Si bdd1 tombe, `/sante` renvoie 503 et HAProxy retire les serveurs applicatifs du pool. La
+procédure promeut bdd2 puis repointe les serveurs applicatifs ; elle est chronométrée par
+`tests/v4-bascule.ps1` et se fait à la main ainsi :
 
 ```powershell
-vagrant provision
-vagrant provision bdd1
-vagrant provision bdd2
-vagrant provision app1
-vagrant provision app2
-vagrant provision lb1
-vagrant provision lb2
+vagrant ssh bdd2 -c "sudo bash /vagrant/scripts/bascule-bdd.sh"
+vagrant ssh app1 -c "sudo bash /vagrant/scripts/app-config.sh DB_HOST 192.168.57.32"
+vagrant ssh app2 -c "sudo bash /vagrant/scripts/app-config.sh DB_HOST 192.168.57.32"
 ```
 
-Ouvrir une session SSH dans une VM :
+(une commande par serveur applicatif). Après une bascule, bdd1 est obsolète : reconstruire
+l'infrastructure avec `vagrant destroy -f` puis `vagrant up`.
 
-```powershell
-vagrant ssh bdd1
+## Scénarios de validation
+
+Les scripts s'exécutent depuis la racine du dépôt, une fois `vagrant up` terminé.
+Les résultats bruts sont écrits dans `tests/resultats/`.
+
+| Scénario | Commande |
+|---|---|
+| Contrôle du répartiteur (R3, R4, R8, E1) | `./tests/verif-lb.ps1` |
+| R5 - réplication | `./tests/r5-replication.ps1` |
+| V1 - répartition | `./tests/v1-repartition.ps1` |
+| V2 - panne d'un serveur applicatif | `./tests/v2-panne-app.ps1` |
+| V3 - montée en charge (N=2 puis N=4) | `./tests/v3-charge.ps1` |
+| V4 - panne de la base et bascule | `./tests/v4-bascule.ps1` |
+| V5 - reconstruction | `./tests/v5-reconstruction.ps1` |
+| V6 - panne du répartiteur (E1) | `./tests/v6-panne-lb.ps1` |
+| E3 - gain du cache Redis | `./tests/e3-cache.ps1` |
+
+Si PowerShell refuse d'exécuter les scripts : `Set-ExecutionPolicy -Scope Process Bypass`.
+
+## Extensions réalisées
+
+- **E1 - répartiteur redondant** : lb2, keepalived (VRRP, unicast), IP virtuelle `192.168.57.5`.
+  Test : `vagrant halt lb1` et le service reste joignable via la VIP.
+- **E3 - cache** : Redis sur bdd2, utilisé par l'API pour les consultations répétées
+  (durée de vie `CACHE_TTL`, 60 s par défaut). Les données étant en lecture seule, l'invalidation
+  se fait par expiration. Une panne de Redis n'interrompt pas le service : l'API lit la base.
+
+## Structure du dépôt
+
+```
+Vagrantfile            machines, réseau, paramètres ; écrit config/noeuds.yml
+.env.exemple           modèle des variables (le vrai .env n'est pas versionné)
+app/app.py             API Flask (moins de 100 lignes)
+database/              schéma et jeu de 50 000 résultats
+scripts/               provisionnement (bdd, replique, app, lb) et outils d'exploitation
+tests/                 scénarios PowerShell et résultats bruts
+docs/                  schéma, dossier d'architecture, journal de bord
 ```
 
-Arrêter, redémarrer ou supprimer les VM :
+## Dépannage
 
-```powershell
-vagrant halt
-vagrant reload
-vagrant destroy
-```
+- **Service injoignable** : un service qui écoute sur `127.0.0.1` n'est joignable de personne ;
+  tous les services de ce dépôt écoutent sur `0.0.0.0` (ou l'adresse privée).
+- **`Fichier .env manquant`** : créer le `.env` à côté du `Vagrantfile` (`Copy-Item .env.exemple .env`).
+  Le `Vagrantfile` le vérifie à chaque commande `vagrant`, y compris `vagrant box add`.
+- **Scripts qui échouent avec des erreurs étranges** : fins de ligne CRLF ; le fichier
+  `.gitattributes` force LF, cloner après sa mise en place.
+- **HAProxy renvoie 503** : aucun serveur applicatif ne répond à `/sante` ; vérifier la base
+  (`vagrant ssh app1 -c "sudo journalctl -u resultats-api -n 30"`).
 
-`vagrant destroy` supprime les VM et leurs données locales. Il faut confirmer
-l'opération dans Vagrant ; ne l'utiliser que si cette suppression est voulue.
+## Limites connues
 
-## Vérifications de l'infrastructure
-
-### Base primaire
-
-Vérifier que PostgreSQL répond et compter les résultats importés :
-
-```powershell
-vagrant ssh bdd1 -c "sudo systemctl is-active postgresql"
-vagrant ssh bdd1 -c "sudo -u postgres psql -d resultats -c 'SELECT COUNT(*) FROM resultats;'"
-```
-
-Le jeu de données initial contient 50 000 lignes.
-
-### Réplication
-
-Vérifier que PostgreSQL tourne sur la réplique et qu'elle est bien en mode
-standby (`t` signifie vrai) :
-
-```powershell
-vagrant ssh bdd2 -c "sudo systemctl is-active postgresql"
-vagrant ssh bdd2 -c "sudo -u postgres psql -tAc 'SELECT pg_is_in_recovery();'"
-```
-
-### HAProxy
-
-Vérifier la syntaxe de HAProxy et l'état des services sur les deux répartiteurs :
-
-```powershell
-vagrant ssh lb1 -c "sudo haproxy -c -f /etc/haproxy/haproxy.cfg"
-vagrant ssh lb1 -c "sudo systemctl is-active haproxy"
-vagrant ssh lb1 -c "sudo systemctl is-active keepalived"
-vagrant ssh lb2 -c "sudo systemctl is-active haproxy"
-vagrant ssh lb2 -c "sudo systemctl is-active keepalived"
-```
-
-Depuis Windows, vérifier l'API via la VIP et vérifier la présence de l'adresse
-virtuelle sur le répartiteur actif :
-
-```powershell
-Invoke-RestMethod http://192.168.63.10/sante
-vagrant ssh lb1 -c "ip -4 addr show"
-vagrant ssh lb2 -c "ip -4 addr show"
-```
-
-L'adresse `192.168.63.10` doit apparaître sur le répartiteur actif. Le port
-redirigé local `127.0.0.1:8080` pointe directement sur `lb1` et ne remplace pas
-le test de la VIP en cas d'arrêt de ce répartiteur.
-
-## Tests de l'API, de la scalabilité et de la résilience
-
-Les tests PowerShell s'exécutent depuis le dossier racine du projet, avec les
-VM configurées et provisionnées.
-
-Tester la santé et la recherche d'un résultat via HAProxy :
-
-```powershell
-.\tests\test-api.ps1
-```
-
-Vérifier la répartition des requêtes entre plusieurs serveurs applicatifs :
-
-```powershell
-.\tests\test-load.ps1
-```
-
-Ce test effectue 20 requêtes à `/info`, affiche le nom des serveurs ayant
-répondu et signale si au moins deux applications ont été observées. Il s'agit
-d'un test de répartition, pas d'un benchmark de débit.
-
-Tester la résilience des répartiteurs nécessite `ENABLE_HA=true` et les deux
-VM `lb1` et `lb2` en marche. Le test arrête temporairement `lb1`, vérifie que
-la VIP continue de répondre via `lb2`, puis tente de redémarrer `lb1` :
-
-```powershell
-.\tests\test-failover.ps1
-```
-
-Le test de bascule PostgreSQL est manuel. Après vérification que `bdd2` est à
-jour, lancer la promotion depuis cette VM ; le script demande la confirmation
-explicite `PROMOUVOIR-BDD2` :
-
-```bash
-vagrant ssh bdd2
-sudo bash /vagrant/scripts/failover-db.sh
-```
-
-Après la promotion, mettre à jour `DB_HOST` dans `/etc/resultats-bf.env` sur
-chaque VM applicative et redémarrer `resultats-api`. Cette étape n'est pas
-automatisée par le script de promotion.
-
-Pour contrôler la réplication des données, insérer un résultat dans la base
-primaire puis vérifier sa présence sur `bdd2` :
-
-Depuis PowerShell, ouvrir la session sur la base primaire :
-
-```powershell
-vagrant ssh bdd1
-```
-
-Dans la VM `bdd1`, ouvrir `psql` et effectuer l'insertion :
-
-```bash
-sudo -u postgres psql -d resultats
-```
-
-Dans `psql` :
-
-```sql
-INSERT INTO resultats (matricule, nom, serie, moyenne, admis)
-VALUES ('TESTREPLI001', 'Test Replication', 'H', 12.50, true)
-ON CONFLICT (matricule) DO NOTHING;
-
-SELECT * FROM resultats WHERE matricule = 'TESTREPLI001';
-```
-
-Quitter `psql` avec `\q`, puis la VM avec `exit`. Depuis PowerShell, ouvrir
-une session sur la réplique :
-
-```powershell
-vagrant ssh bdd2
-```
-
-Dans la VM `bdd2`, vérifier la ligne répliquée :
-
-```bash
-sudo -u postgres psql -d resultats
-```
-
-Dans cette session `psql`, exécuter :
-
-```sql
-SELECT * FROM resultats WHERE matricule = 'TESTREPLI001';
-```
-
-## Arrêt et nettoyage
-
-Arrêter les machines en conservant leur état :
-
-```powershell
-vagrant halt
-```
-
-Supprimer les machines virtuelles :
-
-```powershell
-vagrant destroy
-```
-
-## Fichiers principaux
-
-- [`Vagrantfile`](./Vagrantfile) : définition des VM, des réseaux et des ports.
-- [`scripts/setup-database.sh`](./scripts/setup-database.sh) : installation et
-  configuration de PostgreSQL primaire.
-- [`scripts/setup-replica.sh`](./scripts/setup-replica.sh) : initialisation de
-  la réplique PostgreSQL.
-- [`scripts/setup-lb.sh`](./scripts/setup-lb.sh) : configuration de HAProxy.
-- [`scripts/setup-lb-ha.sh`](./scripts/setup-lb-ha.sh) : configuration de
-  HAProxy et Keepalived sur les deux répartiteurs.
-- [`scripts/failover-db.sh`](./scripts/failover-db.sh) : promotion manuelle de
-  la réplique PostgreSQL après confirmation.
-- [`tests/test-api.ps1`](./tests/test-api.ps1),
-  [`tests/test-load.ps1`](./tests/test-load.ps1) et
-  [`tests/test-failover.ps1`](./tests/test-failover.ps1) : tests de l'API, de
-  la répartition des requêtes et du basculement de la VIP.
-- [`database/schema.sql`](./database/schema.sql) et
-  [`database/seed.sql`](./database/seed.sql) : schéma et données initiales.
+- Les VM partagent le processeur d'un seul poste : doubler les serveurs ne double pas le débit.
+- La bascule de la base est manuelle et ne reconstruit pas bdd1 en réplique.
+- lb2 est passif : il reprend la VIP, il ne partage pas la charge.
+- La page de statistiques HAProxy n'est pas protégée (réseau privé uniquement).
