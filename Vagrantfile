@@ -2,10 +2,10 @@
 require 'yaml'
 require 'fileutils'
 
-GROUPE   = (ENV['GROUPE'] || 2).to_i     # numéro de groupe : 2
+GROUPE   = (ENV['GROUPE'] || 2).to_i     # numéro de groupe : 18 mais 8 pour le travail
 NB_APP   = (ENV['NB_APP'] || 2).to_i     # R3 : nombre de serveurs applicatifs
 AVEC_LB2 = ENV['LB2'] != '0'             # extension E1 : active par défaut, LB2=0 pour l'éteindre
-RESEAU   = "192.168.#{55 + GROUPE}"      # groupe 2 -> 192.168.57.0/24
+RESEAU   = "192.168.#{55 + GROUPE}"      # groupe 8 -> 192.168.63.0/24
 VIP      = "#{RESEAU}.5"                 # IP virtuelle VRRP (E1)
 BOITE    = "bento/ubuntu-24.04"
 VERSION  = "202404.26.0"                 # épinglée : identique pour les 4 membres
