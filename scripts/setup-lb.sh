@@ -48,6 +48,9 @@ for i in $(seq 1 "$NB_APP"); do
         "$i" "$((20 + i))" >> /etc/haproxy/haproxy.cfg
 done
 
+cat /vagrant/rbf-observability-dashboard/haproxy/prometheus-metrics.cfg \
+    >> /etc/haproxy/haproxy.cfg
+
 haproxy -c -f /etc/haproxy/haproxy.cfg
 systemctl enable haproxy
 systemctl restart haproxy

@@ -1,0 +1,6 @@
+# Ajouté sous scrape_configs par scripts/setup-observability.sh.
+# Les deux load balancers exposent l'endpoint HAProxy sur le port 8404.
+  - job_name: haproxy
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['192.168.63.11:8404', '192.168.63.12:8404']

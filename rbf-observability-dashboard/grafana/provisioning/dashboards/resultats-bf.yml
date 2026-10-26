@@ -1,0 +1,11 @@
+apiVersion: 1
+providers:
+  - name: 'RÉSULTATS-BF'
+    orgId: 1
+    folder: 'RÉSULTATS-BF'
+    type: file
+    disableDeletion: true
+    editable: true
+    updateIntervalSeconds: 10
+    options:
+      path: /var/lib/grafana/dashboards

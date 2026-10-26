@@ -146,11 +146,14 @@ applications, puis les répartiteurs et enfin `obs`. Ne provisionner `app3`,
 Avec `ENABLE_OBS=true`, la VM `obs` (`192.168.63.41`) installe et démarre
 Prometheus et Grafana. Le script `setup-observability.sh` configure Prometheus
 pour collecter les métriques toutes les 15 secondes et ajoute automatiquement
-Prometheus comme source de données par défaut dans Grafana. Le script
-`setup-node-exporter.sh` installe Node Exporter sur chaque VM ; il expose les
-métriques système sur le port `9100` du réseau privé. Si les autres VM étaient
-déjà créées avant l'ajout du provisionneur Node Exporter, les reprovisionner
-avec `vagrant provision` pour installer l'exporter sur celles-ci.
+Prometheus comme source de données par défaut dans Grafana. Il provisionne
+également le tableau de bord RÉSULTATS-BF. Lorsque `ENABLE_HA=true`, HAProxy
+expose ses métriques sur le port `8404` de `lb1` et `lb2`, et Prometheus les
+collecte via le job `haproxy`.
+Le script `setup-node-exporter.sh` installe Node Exporter sur chaque VM ; il
+expose les métriques système sur le port `9100` du réseau privé. Si les VM
+étaient déjà créées avant l'ajout ou la modification de ces provisionneurs,
+les reprovisionner avec `vagrant provision`.
 
 | Outil | Accès depuis Windows | Fonction |
 | --- | --- | --- |
@@ -163,15 +166,27 @@ Les ports Grafana `3000` et Prometheus `9090` sont redirigés vers l'hôte sur
 initiaux du paquet sont `admin` / `admin` ; Grafana demande de définir un
 nouveau mot de passe. Ne conserve pas le mot de passe initial.
 
-Pour démarrer l'observabilité après avoir activé `ENABLE_OBS=true` dans `.env` :
+Pour démarrer l'observabilité après avoir activé `ENABLE_OBS=true` dans `.env`
+(et `ENABLE_HA=true` pour démarrer les deux répartiteurs) :
 
 ```powershell
-vagrant up obs
+vagrant up lb1 lb2 obs
+```
+
+Si les VM sont déjà en marche, appliquer les configurations et le dashboard
+avec :
+
+```powershell
+vagrant provision lb1
+vagrant provision lb2
+vagrant provision obs
 ```
 
 Pour vérifier l'état des services et la configuration Prometheus :
 
 ```powershell
+vagrant ssh lb1 -c "sudo haproxy -c -f /etc/haproxy/haproxy.cfg"
+vagrant ssh lb2 -c "sudo haproxy -c -f /etc/haproxy/haproxy.cfg"
 vagrant ssh obs -c "sudo systemctl is-active prometheus"
 vagrant ssh obs -c "sudo systemctl is-active grafana-server"
 vagrant ssh obs -c "sudo promtool check config /etc/prometheus/prometheus.yml"
@@ -181,11 +196,72 @@ Invoke-RestMethod http://localhost:3000/api/health
 
 Dans l'interface Prometheus, ouvre `Status` puis `Targets` pour vérifier les
 cibles de collecte. Les cibles Node Exporter sont déclarées dans
-`/etc/prometheus/prometheus.yml` : `bdd1`, `bdd2`, `app1` à `app4`, `lb1`,
-`lb2` et `obs`. Les machines optionnelles qui ne sont pas démarrées ou activées
+`/etc/prometheus/prometheus.yml`. Le job `haproxy` collecte `lb1` et `lb2` sur
+le port `8404` si `ENABLE_HA=true` ; vérifie qu'elles sont `UP` dans `Status`
+puis `Targets`.
+Node Exporter est configuré pour `bdd1`, `bdd2`, `app1` à `app4`, `lb1`,
+`lb2` et `obs`. Les machines optionnelles non activées ou non démarrées
 apparaîtront comme indisponibles (`DOWN`) ; cela ne signifie pas nécessairement
-que Prometheus est en panne. Les cibles activées doivent passer à `UP` après
-leur provisionnement.
+que Prometheus est en panne. Les cibles des VM activées doivent passer à `UP`
+après leur provisionnement.
+
+### Test manuel du dashboard et des métriques HAProxy
+
+1. Si `ENABLE_HA=true`, vérifier que l'endpoint métriques répond sur les deux
+   répartiteurs :
+
+   ```powershell
+   
+   
+   vagrant ssh lb2 -c "curl -fsS http://127.0.0.1:8404/metrics | grep -E '^haproxy_(frontend_http_requests_total|server_http_responses_total)'"
+   ```
+
+   Les commandes doivent afficher des compteurs `haproxy_frontend_http_requests_total`
+   et `haproxy_server_http_responses_total`.
+
+2. Générer du trafic vers l'API depuis PowerShell. Cette boucle envoie
+   cinq requêtes toutes les demi-secondes pendant une minute :
+
+   ```powershell
+   $fin = (Get-Date).AddSeconds(60)
+   while ((Get-Date) -lt $fin) {
+       1..5 | ForEach-Object {
+           Invoke-RestMethod "http://127.0.0.1:8080/info" | Out-Null
+       }
+       Start-Sleep -Milliseconds 500
+   }
+   ```
+
+   Le script [`tests/test-load.ps1`](./tests/test-load.ps1) est une alternative
+   rapide pour vérifier la répartition entre les serveurs applicatifs.
+
+3. Dans Prometheus, ouvre [Targets](http://localhost:9090/targets) et vérifie
+   que les cibles du job `haproxy` sont `UP`. Pour vérifier les compteurs,
+   exécute cette requête dans l'interface Prometheus :
+
+   ```promql
+   sum(rate(haproxy_frontend_http_requests_total{proxy="resultats_frontend"}[1m]))
+   ```
+
+4. Dans [Grafana](http://localhost:3000), ouvre le dossier **RÉSULTATS-BF**
+   puis le tableau de bord **RÉSULTATS-BF — Supervision & Haute disponibilité**.
+   Après avoir généré du trafic et attendu quelques intervalles de collecte,
+   les panneaux de requêtes par seconde et de réponses par serveur doivent
+   afficher des données. Node Exporter fournit les métriques système ; ce
+   provisionnement ne collecte pas de métriques propres à PostgreSQL.
+
+Un test de panne applicative est facultatif et arrête réellement la VM ciblée.
+Ne l'effectuer que si l'interruption est acceptable ; remettre la VM en marche
+à la fin, même si le test échoue :
+
+```powershell
+vagrant halt app2
+# Refaire les requêtes vers http://127.0.0.1:8080/info et observer Grafana.
+vagrant up app2
+```
+
+Attendre ensuite que `Invoke-RestMethod http://127.0.0.1:8080/sante` réussisse
+et que l'état du serveur applicatif revienne à `UP`.
 
 Exemples de requêtes PromQL à essayer dans Prometheus ou dans l'explorateur de
 Grafana :
@@ -201,11 +277,9 @@ up
 node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes
 ```
 
-La source de données Prometheus est provisionnée automatiquement, mais aucun
-tableau de bord Grafana n'est installé par le script à ce stade. Tu peux créer
-un tableau de bord dans Grafana et y ajouter les requêtes PromQL ci-dessus.
-Node Exporter fournit des métriques système ; cette configuration ne collecte
-pas les métriques propres à PostgreSQL, HAProxy ou à l'API.
+La source de données Prometheus et le tableau de bord RÉSULTATS-BF sont
+provisionnés automatiquement. La configuration collecte les métriques système
+et celles de HAProxy, mais pas les métriques propres à PostgreSQL.
 
 ## Provisionnement et administration
 

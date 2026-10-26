@@ -45,6 +45,10 @@ scrape_configs:
           - "192.168.63.41:9100"
 PROM
 
+# Collecter les métriques des deux load balancers.
+cat /vagrant/rbf-observability-dashboard/prometheus/haproxy-scrape.yml \
+    >> /etc/prometheus/prometheus.yml
+
 # Source de données Grafana automatiquement provisionnée.
 install -d -m 755 /etc/grafana/provisioning/datasources
 
@@ -60,6 +64,17 @@ datasources:
     isDefault: true
     editable: true
 GRAFANA
+
+# Dashboard Grafana automatiquement provisionné.
+install -d -o grafana -g grafana -m 755 /var/lib/grafana/dashboards
+install -d -m 755 /etc/grafana/provisioning/dashboards
+install -m 644 \
+    /vagrant/rbf-observability-dashboard/grafana/dashboards/resultats-bf.json \
+    /var/lib/grafana/dashboards/resultats-bf.json
+install -m 644 \
+    /vagrant/rbf-observability-dashboard/grafana/provisioning/dashboards/resultats-bf.yml \
+    /etc/grafana/provisioning/dashboards/resultats-bf.yml
+chown -R grafana:grafana /var/lib/grafana/dashboards
 
 promtool check config /etc/prometheus/prometheus.yml
 
