@@ -17,7 +17,14 @@ PG_DATA="/var/lib/postgresql/${PG_VERSION}/main"
 PG_CONF="/etc/postgresql/${PG_VERSION}/main/postgresql.conf"
 
 systemctl enable postgresql
-
+# --- Autoriser les serveurs applicatifs (necessaire apres la bascule) ---
+# pg_hba.conf est hors du dossier de donnees : pg_basebackup ne le copie pas.
+PG_HBA="/etc/postgresql/${PG_VERSION}/main/pg_hba.conf"
+APP_SUBNET="${PRIMARY_IP%.*}.0/24"
+if ! grep -qF "# resultats-bf-apps" "$PG_HBA"; then
+    printf '\n# resultats-bf-apps (gere par setup-replica.sh)\nhost    %s    %s    %s    scram-sha-256\n' \
+        "${DB_NAME:-resultats}" "${DB_USER:-resultats_app}" "$APP_SUBNET" >> "$PG_HBA"
+fi
 if [[ -f "${PG_DATA}/standby.signal" ]]; then
     log "Une réplique existe déjà : conservation des données"
     systemctl restart postgresql
