@@ -1,4 +1,4 @@
-# RÉSULTATS-BF - groupe 2
+# RÉSULTATS-BF - groupe 18
 
 Plateforme de consultation de résultats d'examens, résiliente et extensible, entièrement
 décrite en code avec Vagrant et VirtualBox (projet de groupe M1, module DevOps et
@@ -8,16 +8,16 @@ trafic se fait en ajoutant des serveurs applicatifs.
 
 ## Architecture
 
-Réseau privé du groupe 2 : `192.168.57.0/24`. Schéma : `docs/architecture.svg`.
+Réseau privé du groupe 18 (numéro de groupe du TP : 8) : `192.168.63.0/24`. Schéma : `docs/architecture.svg`.
 
 | Machine | Rôle | Adresse | RAM |
 |---|---|---|---|
-| (VIP) | IP virtuelle partagée par lb1 et lb2 (VRRP) | 192.168.57.5 | - |
-| lb1 | HAProxy + keepalived, actif | 192.168.57.11 | 512 Mo |
-| lb2 | HAProxy + keepalived, passif (extension E1) | 192.168.57.12 | 512 Mo |
-| app1 ... appN | API Flask + gunicorn, sans état (`NB_APP`, de 2 à 9) | 192.168.57.21 ... .2N | 512 Mo |
-| bdd1 | PostgreSQL primaire | 192.168.57.31 | 768 Mo |
-| bdd2 | PostgreSQL réplique en flux + Redis (extension E3) | 192.168.57.32 | 768 Mo |
+| (VIP) | IP virtuelle partagée par lb1 et lb2 (VRRP) | 192.168.63.10 | - |
+| lb1 | HAProxy + keepalived, actif | 192.168.63.11 | 512 Mo |
+| lb2 | HAProxy + keepalived, passif (extension E1) | 192.168.63.12 | 512 Mo |
+| app1 ... appN | API Flask + gunicorn, sans état (`NB_APP`, de 2 à 9) | 192.168.63.21 ... .2N | 512 Mo |
+| bdd1 | PostgreSQL primaire | 192.168.63.31 | 768 Mo |
+| bdd2 | PostgreSQL réplique en flux + Redis (extension E3) | 192.168.63.32 | 768 Mo |
 
 HAProxy répartit les requêtes en round-robin et n'envoie du trafic qu'aux serveurs dont
 `GET /sante` renvoie 200. Sa configuration est engendrée à partir de `config/noeuds.yml`,
@@ -58,8 +58,8 @@ vagrant up                       # un seul up : tout est provisionné dans l'ord
 Vérifier le résultat :
 
 ```powershell
-curl.exe http://192.168.57.5/info
-curl.exe "http://192.168.57.5/resultat?matricule=BF000042"
+curl.exe http://192.168.63.10/info
+curl.exe "http://192.168.63.10/resultat?matricule=BF000042"
 curl.exe http://localhost:8080/sante
 ```
 
@@ -73,7 +73,7 @@ variables : `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `REPL_USER`, `REPL_PASSWORD`,
 |---|---|---|
 | `NB_APP` | 2 | Nombre de serveurs applicatifs (2 à 9) |
 | `LB2` | actif | `LB2=0` supprime lb2 et keepalived (économie de RAM) |
-| `GROUPE` | 2 | Numéro de groupe, donc plage `192.168.(55+G).0/24` |
+| `GROUPE` | 8 | Numéro de groupe, donc plage `192.168.(55+G).0/24` |
 
 Sous PowerShell, une variable se définit pour la session :
 
@@ -96,7 +96,7 @@ vagrant halt                 # arrête les VM
 vagrant destroy -f ; vagrant up    # reconstruction complète (R1)
 ```
 
-Statistiques HAProxy (réseau privé) : `vagrant ssh lb1 -c "curl -s 192.168.57.11:8404"`.
+Statistiques HAProxy (réseau privé) : `vagrant ssh lb1 -c "curl -s 192.168.63.11:8404"`.
 
 ### Bascule de la base (R6)
 
@@ -106,8 +106,8 @@ procédure promeut bdd2 puis repointe les serveurs applicatifs ; elle est chrono
 
 ```powershell
 vagrant ssh bdd2 -c "sudo bash /vagrant/scripts/bascule-bdd.sh"
-vagrant ssh app1 -c "sudo bash /vagrant/scripts/app-config.sh DB_HOST 192.168.57.32"
-vagrant ssh app2 -c "sudo bash /vagrant/scripts/app-config.sh DB_HOST 192.168.57.32"
+vagrant ssh app1 -c "sudo bash /vagrant/scripts/app-config.sh DB_HOST 192.168.63.32"
+vagrant ssh app2 -c "sudo bash /vagrant/scripts/app-config.sh DB_HOST 192.168.63.32"
 ```
 
 (une commande par serveur applicatif). Après une bascule, bdd1 est obsolète : reconstruire
@@ -134,7 +134,7 @@ Si PowerShell refuse d'exécuter les scripts : `Set-ExecutionPolicy -Scope Proce
 
 ## Extensions réalisées
 
-- **E1 - répartiteur redondant** : lb2, keepalived (VRRP, unicast), IP virtuelle `192.168.57.5`.
+- **E1 - répartiteur redondant** : lb2, keepalived (VRRP, unicast), IP virtuelle `192.168.63.10`.
   Test : `vagrant halt lb1` et le service reste joignable via la VIP.
 - **E3 - cache** : Redis sur bdd2, utilisé par l'API pour les consultations répétées
   (durée de vie `CACHE_TTL`, 60 s par défaut). Les données étant en lecture seule, l'invalidation

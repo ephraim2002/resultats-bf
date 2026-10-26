@@ -1,150 +1,68 @@
-# Charger les variables du fichier .env sans dépendance externe.
-env_file = File.expand_path(".env", __dir__)
+# -*- mode: ruby -*-
+require 'yaml'
+require 'fileutils'
 
-if File.exist?(env_file)
-  File.foreach(env_file) do |line|
-    line = line.strip
-    next if line.empty? || line.start_with?("#")
-    next unless line.include?("=")
+GROUPE   = (ENV['GROUPE'] || 8).to_i     # numéro de groupe du TP : 8 (groupe 18)
+NB_APP   = (ENV['NB_APP'] || 2).to_i     # R3 : nombre de serveurs applicatifs
+AVEC_LB2 = ENV['LB2'] != '0'             # E1 active par défaut ; LB2=0 pour l'éteindre
+RESEAU   = "192.168.#{55 + GROUPE}"      # groupe TP 8 -> 192.168.63.0/24
+VIP      = "#{RESEAU}.10"                # IP virtuelle VRRP (E1)
+BOITE    = "bento/ubuntu-24.04"
+VERSION  = "202404.23.0"                 # épinglée, identique pour les 4 membres
 
-    key, value = line.split("=", 2)
-    key = key.strip
-    value = value.strip
+abort "GROUPE doit être compris entre 1 et 8" unless (1..8).cover?(GROUPE)
+abort "NB_APP doit être compris entre 2 et 9" unless (2..9).cover?(NB_APP)
 
-    ENV[key] = value unless ENV.key?(key)
-  end
+# Lecture du .env (Vagrant ne le lit pas tout seul). Jamais versionné (R7).
+def charger_env(chemin)
+  abort "Fichier .env manquant : copier .env.exemple en .env" unless File.exist?(chemin)
+  File.readlines(chemin).map(&:strip)
+      .reject { |l| l.empty? || l.start_with?('#') }
+      .map { |l| l.split('=', 2) }.to_h
 end
+SECRETS = charger_env(File.join(__dir__, '.env'))
 
-NB_APP = ENV.fetch("NB_APP", "2").to_i
-ENABLE_HA = ENV.fetch("ENABLE_HA", "false") == "true"
-ENABLE_OBS = ENV.fetch("ENABLE_OBS", "false") == "true"
-
-if NB_APP < 2 || NB_APP > 4
-  raise "NB_APP doit être compris entre 2 et 4."
+# Source unique de vérité : le Vagrantfile ET la configuration de HAProxy
+# (scripts/lb.sh) sont engendrés à partir de cette table.
+NOEUDS = []
+NOEUDS << { "nom" => "bdd1", "ip" => "#{RESEAU}.31", "mem" => 768, "role" => "bdd" }
+NOEUDS << { "nom" => "bdd2", "ip" => "#{RESEAU}.32", "mem" => 768, "role" => "replique" }
+(1..NB_APP).each do |i|
+  NOEUDS << { "nom" => "app#{i}", "ip" => "#{RESEAU}.#{20 + i}", "mem" => 512, "role" => "app" }
 end
+NOEUDS << { "nom" => "lb1", "ip" => "#{RESEAU}.11", "mem" => 512, "role" => "lb" }
+NOEUDS << { "nom" => "lb2", "ip" => "#{RESEAU}.12", "mem" => 512, "role" => "lb" } if AVEC_LB2
 
-BOX_NAME = "bento/ubuntu-24.04"
-BOX_VERSION = "202404.26.0" 
-
-PROVISION_ENV = {
-  "NB_APP" => NB_APP.to_s,
-  "DB_NAME" => ENV.fetch("DB_NAME", "resultats"),
-  "DB_USER" => ENV.fetch("DB_USER", "resultats_app"),
-  "DB_PASSWORD" => ENV.fetch("DB_PASSWORD", ""),
-  "REPL_USER" => ENV.fetch("REPL_USER", "repli_user"),
-  "REPL_PASSWORD" => ENV.fetch("REPL_PASSWORD", ""),
-  "DB_PRIMARY_IP" => "192.168.63.31",
-  "DB_REPLICA_IP" => "192.168.63.32"
-}
+CONFIG_DIR = File.join(__dir__, "config")
+FileUtils.mkdir_p(CONFIG_DIR)
+File.write(File.join(CONFIG_DIR, "noeuds.yml"), NOEUDS.to_yaml)
 
 Vagrant.configure("2") do |config|
-  config.vm.box = BOX_NAME
-  config.vm.box_version = BOX_VERSION
-  config.vm.boot_timeout = 600
+  config.vm.box = BOITE
+  config.vm.box_version = VERSION
+  config.vm.box_check_update = false
 
-  config.vm.define "bdd1" do |vm|
-    vm.vm.hostname = "bdd1"
-    vm.vm.network "private_network", ip: "192.168.63.31"
+  NOEUDS.each do |n|
+    config.vm.define n["nom"] do |m|
+      m.vm.hostname = n["nom"]
+      m.vm.network "private_network", ip: n["ip"]
+      # R8 : seul lb1 expose un port vers l'hôte (8080 -> 80)
+      m.vm.network "forwarded_port", guest: 80, host: 8080 if n["nom"] == "lb1"
 
-    vm.vm.provider "virtualbox" do |vb|
-      vb.name = "resultats-bf-bdd1"
-      vb.memory = 768
-      vb.cpus = 1
-    end
-
-    vm.vm.provision "shell",
-      path: "scripts/setup-database.sh",
-      env: PROVISION_ENV
-  end
-
-  config.vm.define "bdd2" do |vm|
-    vm.vm.hostname = "bdd2"
-    vm.vm.network "private_network", ip: "192.168.63.32"
-
-    vm.vm.provider "virtualbox" do |vb|
-      vb.name = "resultats-bf-bdd2"
-      vb.memory = 768
-      vb.cpus = 1
-    end
-
-    vm.vm.provision "shell",
-      path: "scripts/setup-replica.sh",
-      env: PROVISION_ENV
-  end
-
-  (1..NB_APP).each do |i|
-    config.vm.define "app#{i}" do |vm|
-      vm.vm.hostname = "app#{i}"
-      vm.vm.network "private_network", ip: "192.168.63.#{20 + i}"
-
-      vm.vm.provider "virtualbox" do |vb|
-        vb.name = "resultats-bf-app#{i}"
-        vb.memory = 512
+      m.vm.provider "virtualbox" do |vb|
+        vb.memory = n["mem"]
         vb.cpus = 1
+        vb.linked_clone = true
       end
 
-      vm.vm.provision "shell",
-        path: "scripts/setup-app.sh",
-        env: PROVISION_ENV
-    end
-  end
-
-  config.vm.define "lb1" do |vm|
-    vm.vm.hostname = "lb1"
-    vm.vm.network "private_network", ip: "192.168.63.11"
-
-    # Seul le répartiteur expose le port HTTP sur l'hôte.
-    vm.vm.network "forwarded_port",
-      guest: 80,
-      host: 8080,
-      host_ip: "127.0.0.1",
-      auto_correct: true
-
-    vm.vm.provider "virtualbox" do |vb|
-      vb.name = "resultats-bf-lb1"
-      vb.memory = 512
-      vb.cpus = 1
-    end
-
-    vm.vm.provision "shell",
-    path: "scripts/setup-lb-ha.sh",
-    env: PROVISION_ENV.merge("LB_PRIORITY" => "110")
-  end
-
-  if ENABLE_HA
-    config.vm.define "lb2" do |vm|
-      vm.vm.hostname = "lb2"
-      vm.vm.network "private_network", ip: "192.168.63.12"
-
-      # Port de secours pour accéder directement à lb2 depuis Windows.
-      vm.vm.network "forwarded_port",
-        guest: 80,
-        host: 8081,
-        host_ip: "127.0.0.1",
-        auto_correct: true
-
-      vm.vm.provider "virtualbox" do |vb|
-        vb.name = "resultats-bf-lb2"
-        vb.memory = 512
-        vb.cpus = 1
-      end
-
-      vm.vm.provision "shell",
-        path: "scripts/setup-lb-ha.sh",
-        env: PROVISION_ENV.merge("LB_PRIORITY" => "100")
-    end
-  end
-
-  if ENABLE_OBS
-    config.vm.define "obs" do |vm|
-      vm.vm.hostname = "obs"
-      vm.vm.network "private_network", ip: "192.168.63.41"
-
-      vm.vm.provider "virtualbox" do |vb|
-        vb.name = "resultats-bf-obs"
-        vb.memory = 768
-        vb.cpus = 1
-      end
+      env = SECRETS.merge(
+        "NODE_IP" => n["ip"], "NB_APP" => NB_APP.to_s, "GROUPE" => GROUPE.to_s,
+        "PRIMARY_IP" => "#{RESEAU}.31", "REPLICA_IP" => "#{RESEAU}.32",
+        "VIP" => VIP, "LB2" => AVEC_LB2 ? "1" : "0"
+      )
+      m.vm.provision "shell", path: "scripts/common.sh", env: env, run: "always"
+      m.vm.provision "shell", path: "scripts/#{n['role']}.sh", env: env,
+                     run: (n["role"] == "lb" ? "always" : "once")
     end
   end
 end
