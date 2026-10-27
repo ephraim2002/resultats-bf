@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+"""API RESULTATS-BF : les résultats sont stockés dans PostgreSQL."""
 import os
 import socket
 
@@ -8,6 +10,7 @@ from psycopg2.extras import RealDictCursor
 app = Flask(__name__)
 
 DB_HOST = os.getenv("DB_HOST", "192.168.63.31")
+DB_PORT = int(os.getenv("DB_PORT", "5432"))
 DB_NAME = os.getenv("DB_NAME", "resultats")
 DB_USER = os.getenv("DB_USER", "resultats_app")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "")
@@ -16,6 +19,7 @@ DB_PASSWORD = os.getenv("DB_PASSWORD", "")
 def get_connection():
     return psycopg2.connect(
         host=DB_HOST,
+        port=DB_PORT,
         dbname=DB_NAME,
         user=DB_USER,
         password=DB_PASSWORD,
@@ -31,22 +35,22 @@ def sante():
                 cur.execute("SELECT 1")
                 cur.fetchone()
         return jsonify({"statut": "ok", "base": "accessible"}), 200
-    except Exception:
+    except psycopg2.Error:
+        app.logger.exception("Vérification de santé PostgreSQL échouée")
         return jsonify({"statut": "indisponible", "base": "inaccessible"}), 503
 
 
 @app.get("/info")
 def info():
     return jsonify({
-        "machine": socket.gethostname(),
-        "service": "resultats-bf-api"
+        "hote": socket.gethostname(),
+        "service": "resultats-bf-api",
     }), 200
 
 
 @app.get("/resultat")
 def resultat():
     matricule = request.args.get("matricule", "").strip()
-
     if not matricule:
         return jsonify({"erreur": "Le parametre matricule est obligatoire"}), 400
 
@@ -65,10 +69,8 @@ def resultat():
 
         if row is None:
             return jsonify({"erreur": "Resultat introuvable"}), 404
-
         return jsonify(dict(row)), 200
-
-    except Exception:
+    except psycopg2.Error:
         app.logger.exception("Erreur lors de la lecture des resultats")
         return jsonify({"erreur": "Base de donnees indisponible"}), 503
 
@@ -77,9 +79,9 @@ def resultat():
 def accueil():
     return jsonify({
         "projet": "RESULTATS-BF",
-        "endpoints": ["/sante", "/info", "/resultat?matricule=MAT000001"]
+        "endpoints": ["/sante", "/info", "/resultat?matricule=MAT000001"],
     }), 200
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0", port=int(os.getenv("APP_PORT", "5000")))
