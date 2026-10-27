@@ -119,8 +119,8 @@
       },
       "targets": [
         {
-          "expr": "haproxy_server_status",
-          "legendFormat": "{{proxy}} / {{server}}",
+          "expr": "haproxy_server_status{state=\"UP\"}",
+          "legendFormat": "{{server}} — {{instance}}",
           "refId": "A"
         }
       ],
@@ -128,6 +128,19 @@
         "defaults": {
           "min": 0,
           "max": 1,
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "DOWN"
+                },
+                "1": {
+                  "text": "UP"
+                }
+              }
+            }
+          ],
           "thresholds": {
             "mode": "absolute",
             "steps": [

@@ -79,6 +79,14 @@ vagrant up app2
 ```
 Si nécessaire, attendre la fin du provisionnement puis vérifier `http://127.0.0.1:8080/sante`.
 
+Le panneau sélectionne uniquement `haproxy_server_status{state="UP"}` :
+l'exporter émet aussi des séries distinctes pour `DOWN`, `MAINT`, `DRAIN` et
+`NOLB`, chacune avec sa propre valeur binaire. Ainsi, `UP` signifie serveur
+disponible et `DOWN` signifie serveur arrêté ou déclaré indisponible par la
+vérification HAProxy. Les deux répartiteurs sont affichés séparément ; après
+l'arrêt d'une application, attendre le prochain scrape et les vérifications de
+santé HAProxy (une seconde d'intervalle, deux échecs requis).
+
 Important : `vagrant halt app2` arrête réellement la VM ; la remettre en service à la fin de la démonstration.
 
 ## Notes

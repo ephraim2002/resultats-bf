@@ -250,6 +250,17 @@ après leur provisionnement.
    afficher des données. Node Exporter fournit les métriques système ; ce
    provisionnement ne collecte pas de métriques propres à PostgreSQL.
 
+Le panneau « État des serveurs HAProxy » affiche l'état de chaque serveur
+applicatif sur chaque répartiteur. Il utilise
+`haproxy_server_status{state="UP"}` : l'exporter HAProxy émet une série distincte
+pour chaque état (`UP`, `DOWN`, `MAINT`, `DRAIN`, `NOLB`), et filtrer sur `UP`
+évite de confondre les valeurs zéro des autres états avec l'état réel du serveur.
+`1` correspond à `UP` et `0` à `DOWN`. Pour vérifier l'état dans Prometheus :
+
+```promql
+haproxy_server_status{state="UP"}
+```
+
 Un test de panne applicative est facultatif et arrête réellement la VM ciblée.
 Ne l'effectuer que si l'interruption est acceptable ; remettre la VM en marche
 à la fin, même si le test échoue :
@@ -262,6 +273,9 @@ vagrant up app2
 
 Attendre ensuite que `Invoke-RestMethod http://127.0.0.1:8080/sante` réussisse
 et que l'état du serveur applicatif revienne à `UP`.
+Après un arrêt, HAProxy déclare le serveur `DOWN` après deux contrôles de santé
+en échec, espacés d'une seconde ; le panneau Grafana se met à jour au prochain
+scrape Prometheus (15 secondes au maximum).
 
 Exemples de requêtes PromQL à essayer dans Prometheus ou dans l'explorateur de
 Grafana :
