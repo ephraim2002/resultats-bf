@@ -384,7 +384,20 @@ le test de la VIP en cas d'arrêt de ce répartiteur.
 ## Tests de l'API, de la scalabilité et de la résilience
 
 Les tests PowerShell s'exécutent depuis le dossier racine du projet, avec les
-VM configurées et provisionnées.
+VM configurées et provisionnées. Une validation finale non destructive, avec
+rapport daté CSV/JSON, est disponible dans
+[`tests/validation-finale.ps1`](./tests/validation-finale.ps1). Elle mesure
+séquentiellement l'API `/info` (200 appels par défaut) ; évitez de la lancer
+pendant une démonstration ou un autre benchmark, car elle génère du trafic.
+
+```powershell
+.\tests\validation-finale.ps1 -BaseUrl http://127.0.0.1:8080 -Samples 200
+```
+
+Les rapports sont écrits dans `tests/resultats/`. Pour ne pas mélanger le
+trafic, les machines virtuelles ou le fichier .env du groupe, les scénarios
+qui arrêtent une VM, promeuvent PostgreSQL ou détruisent l'environnement
+restent des essais manuels sous contrôle de l'équipe.
 
 Tester la santé et la recherche d'un résultat via HAProxy :
 
@@ -498,8 +511,16 @@ vagrant destroy
 - [`scripts/failover-db.sh`](./scripts/failover-db.sh) : promotion manuelle de
   la réplique PostgreSQL après confirmation.
 - [`tests/test-api.ps1`](./tests/test-api.ps1),
-  [`tests/test-load.ps1`](./tests/test-load.ps1) et
-  [`tests/test-failover.ps1`](./tests/test-failover.ps1) : tests de l'API, de
-  la répartition des requêtes et du basculement de la VIP.
+  [`tests/test-load.ps1`](./tests/test-load.ps1),
+  [`tests/test-failover.ps1`](./tests/test-failover.ps1) et
+  [`tests/validation-finale.ps1`](./tests/validation-finale.ps1) : tests de
+  l'API, de la répartition, du failover VIP contrôlé et rapport mesuré CSV/JSON.
+- [`docs/architecture.md`](./docs/architecture.md) : dossier d'architecture,
+  scénarios V1–V6, résultats mesurés et limites connues.
+- [`docs/journal-de-bord.md`](./docs/journal-de-bord.md) : journal de bord et
+  bilan des contrôles exécutés.
+- [Dossier d’architecture Word](./livrables/Dossier-architecture-RESULTATS-BF.docx) (15 pages) et
+  [journal de bord Word](./livrables/Journal-de-bord-RESULTATS-BF.docx) (2 pages) : livrables générés par [`docs/generer-livrables.py`](./docs/generer-livrables.py).
+  Les emplacements de logos restent à remplacer par les fichiers institutionnels officiels autorisés, non fournis dans le dépôt.
 - [`database/schema.sql`](./database/schema.sql) et
   [`database/seed.sql`](./database/seed.sql) : schéma et données initiales.
