@@ -40,6 +40,9 @@ __pycache__/
 venv/
 .pytest_cache/
 
+# Métadonnées locales Freebuff
+.freebuff/
+
 # Journaux et fichiers temporaires
 *.log
 *.tmp
